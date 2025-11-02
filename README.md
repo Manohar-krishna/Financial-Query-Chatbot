@@ -1,128 +1,109 @@
-# Financial Query Chatbot
+# XGBoost Inventory Recommendation System
 
-*A rule-based conversational interface for financial data analysis, developed during the BCG Virtual Internship Program*
+A data-driven inventory management solution for hotel bars that replaces reactive ordering with proactive, ML-powered recommendations.
 
-## Overview
+## Problem Statement
 
-This Financial Query Chatbot was developed as part of the Boston Consulting Group (BCG) Virtual Internship training program. The project demonstrates fundamental skills in data analysis automation, Python programming, and building interactive query systems for business intelligence.
+Hotel chains face significant inefficiencies from unoptimized bar inventory:
+- **Stock-outs** → Lost sales, poor guest experience, brand damage
+- **Overstocking** → Capital tied up, increased holding costs, spoilage waste
 
-The chatbot serves as an automated financial analyst assistant, enabling users to quickly retrieve key financial metrics through conversational queries. It showcases the practical application of data manipulation and rule-based natural language processing for business decision-making support.
+This system maintains 95% service levels while minimizing inventory capital.
 
-### Project Context
+## Key Assumptions
 
-Built as part of BCG's virtual internship curriculum, this project addresses the real-world challenge of making financial data more accessible to stakeholders who need quick insights without diving into complex spreadsheets or databases. The chatbot exemplifies how consultants can leverage technology to streamline data analysis and improve client communication.
+| Parameter | Value | Rationale |
+|-----------|-------|-----------|
+| **Lead Time** | 3 days | Regional supplier delivery window |
+| **Service Level** | 95% | Balance between stockout cost and inventory holding cost (Z-score: 1.65) |
+| **Order Increments** | 750ml | Standard bottle size for actionable recommendations |
+| **Current Stock** | Latest closing balance | Assumes real-time inventory data availability |
 
-## Features
+## Model Architecture
 
-- **Revenue Query**: Get total revenue for specific years
-- **Net Income Analysis**: Calculate and report changes in net income between years
-- **Expense Tracking**: Retrieve expense data for specific years
-- **Interactive CLI**: User-friendly command-line interface for continuous interaction
+### Why XGBoost?
 
-## Dataset
+The system uses **three XGBoost models per item** for uncertainty-aware forecasting:
 
-The chatbot currently uses sample financial data for analysis:
+1. **Point Forecast** (`reg:squarederror`) → Mean consumption prediction
+2. **Lower Bound** (`reg:quantileerror`, α=0.1) → 10th percentile
+3. **Upper Bound** (`reg:quantileerror`, α=0.9) → 90th percentile
 
-| Year | Total Revenue ($M) | Net Income ($M) | Expenses ($M) |
-|------|-------------------|-----------------|---------------|
-| 2023 | 120               | 25              | 95            |
-| 2024 | 150               | 35              | 115           |
+**Key Advantages:**
+- **Quantifies uncertainty** via quantile regression for statistical safety stock calculation:  
+  `Safety Stock = Z × forecast_uncertainty × √lead_time`
+- **Scales efficiently** across hundreds of SKU-location pairs
+- **Handles complex features** (lags, rolling stats, cyclical patterns) without extensive preprocessing
+- **Captures non-linear patterns** (e.g., "Fridays are busy for vodka at Location A")
 
-## Prerequisites
+### Why Not Alternatives?
 
-- Python 3.x
-- pandas library
+- **ARIMA/Prophet**: Don't scale to hundreds of series; can't share learnings across items
+- **Deep Learning (LSTMs)**: Overkill complexity for this problem; harder to interpret and deploy
 
-## Installation
+## Performance
 
-1. Clone this repository:
-```bash
-git clone <repository-url>
-cd <repository-directory>
+- **Metric**: Weighted Absolute Percentage Error (WAPE)
+- **Result**: 35-45% on 5-fold time series CV
+- **Interpretation**: Strong performance for sparse, multi-SKU inventory data
+- **Business Output**: Prioritized, actionable reorder alerts
+
+## Future Improvements
+
+### 1. External Regressors (Priority #1)
+Add demand drivers to explain variation:
+- Hotel occupancy rates (from PMS)
+- Local events (conferences, festivals)
+- Promotions and menu features
+- Weather conditions
+
+### 2. Financial Optimization
+- Integrate `item_cost` and `item_price` for revenue-based alert prioritization
+- Implement Economic Order Quantity (EOQ) calculations
+
+### 3. Lead Time Variability
+Model supplier delivery uncertainty (e.g., mean = 3 days, σ = 1 day) for more robust safety stock
+
+## Production Architecture
+
+```
+┌─────────────────┐     ┌──────────────┐     ┌─────────────────┐
+│  Data Sources   │────▶│  ML Pipeline │────▶│  Alert System   │
+└─────────────────┘     └──────────────┘     └─────────────────┘
+   • POS System           • Feature Eng        • Power BI/Tableau
+   • Inventory DB         • Daily Retrain      • Priority Ranking
+   • PMS (Occupancy)      • Forecasting        • Recommended Qty
+   • Event/Weather APIs   • Alert Generation   • Mobile Access
 ```
 
-2. Install required dependencies:
-```bash
-pip install pandas
-```
+### Orchestration
+Automated nightly execution via Airflow/AWS Step Functions:
+1. Ingest consumption + inventory data
+2. Engineer features & retrain models
+3. Generate forecasts & alerts
+4. Push to dashboard
 
-## Usage
-
-Run the chatbot from the command line:
-
-```bash
-python bcg_chatbot.py
-```
-
-### Sample Queries
-
-The chatbot can answer the following types of questions:
-
-- "What was the total revenue in 2024?"
-- "How has net income changed from 2023 to 2024?"
-- "What were the expenses in 2023?"
-
-### Example Interaction
+### User Experience
+Bar managers see a simple prioritized list each morning:
 
 ```
-Welcome to the Financial Analysis Chatbot! Type 'exit' to quit.
-
-You: What was the total revenue in 2024?
-Chatbot: The total revenue in 2024 was $150 million.
-
-You: How has net income changed from 2023 to 2024?
-Chatbot: Net income increased by $10 million from 2023 to 2024.
-
-You: exit
-Chatbot: Goodbye!
+🔴 CRITICAL | Grey Goose Vodka | 0.8 days left | Order: 12 bottles (2 cases)
+🟡 MEDIUM   | Jack Daniels     | 2.3 days left | Order: 6 bottles (1 case)
 ```
 
-## Code Structure
+## Monitoring KPIs
 
-### Key Functions
+**Model Health:**
+- WAPE and forecast bias tracking
+- Model drift detection & retraining triggers
 
-- **`get_revenue_for_year(year)`**: Fetches total revenue for a specified year
-- **`get_net_income_change()`**: Calculates the difference in net income between 2023 and 2024
-- **`get_expenses_for_year(year)`**: Retrieves expense data for a specified year
-- **`financial_chatbot(user_query)`**: Main logic that matches user queries to appropriate functions
+**Business Impact:**
+- ↓ Stockout rate for high-demand items
+- ↑ Inventory turnover ratio
+- ↓ Total inventory holding cost
+- ↓ Spoilage rate (perishables)
 
-## Customization
+---
 
-### Adding New Data
-
-To update or expand the financial data, modify the `data` dictionary:
-
-```python
-data = {
-    'Year': [2023, 2024, 2025],  # Add more years
-    'Total Revenue ($M)': [120, 150, 180],
-    'Net Income ($M)': [25, 35, 45],
-    'Expenses ($M)': [95, 115, 135]
-}
-```
-
-### Adding New Query Types
-
-To add new question patterns:
-
-1. Create a new function to handle the data retrieval
-2. Add a new condition in the `financial_chatbot()` function
-3. Update the help message with the new query type
-
-## Limitations
-
-- Currently supports only predefined query patterns
-- Limited to years 2023 and 2024 in the sample dataset
-- Requires exact or similar phrasing for query matching
-
-## Future Enhancements
-
-- Implement natural language processing (NLP) for more flexible query understanding
-- Add support for additional financial metrics (ROI, profit margins, growth rates)
-- Expand dataset to include multiple years and categories
-- Create a web-based interface using Flask or Streamlit
-- Add data visualization capabilities
-
-## Acknowledgments
-
-Developed as part of the BCG financial analysis project.
+**Tech Stack**: XGBoost • Python • Pandas • NumPy • Scikit-learn  
+**Deployment**: Cloud-ready (AWS/GCP) • API-first design • Real-time dashboards
